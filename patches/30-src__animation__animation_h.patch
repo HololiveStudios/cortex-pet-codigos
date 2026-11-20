@@ -1,0 +1,78 @@
+# Trecho extraído do bloco 30
+# Referência: src/animation/animation.h
+
+#ifndef CORTEX_ANIMATION_H
+#define CORTEX_ANIMATION_H
+
+#include <stdbool.h>
+#include "face.h"
+#include "runtime_types.h"
+
+typedef struct Brain Brain;
+
+/* ── micro-expressões ──────────────────────────────────────────── */
+
+typedef enum {
+    MICRO_NONE         = 0,
+    MICRO_SQUINT       = 1,  /* squint sustentado — estresse            */
+    MICRO_DOUBLE_BLINK = 2,  /* dois piscares rápidos — feliz           */
+    MICRO_ASYNC_BLINK  = 3,  /* olho esquerdo lidera — aleatório        */
+    MICRO_SIDE_EYE     = 4,  /* pupilas desviam + squint — curiosidade  */
+} MicroExprType;
+
+typedef struct {
+    MicroExprType type;
+    double  phase;      /* tempo decorrido dentro da micro (segundos)  */
+    int     sub_step;   /* sub-estado interno (double-blink: 0/1/2)    */
+    float   param;      /* squint: nível (0..1) | side-eye: dir (-1/+1) */
+    double  cooldown;   /* duração total restante da micro              */
+} MicroExpr;
+
+/* ── estado de animação ────────────────────────────────────────── */
+
+typedef struct {
+    FaceState  current;      /* estado renderizado neste frame          */
+    FaceState  target;       /* alvo para interpolação                  */
+
+    /* piscar — simétrico quando micro está inativo */
+    double blink_timer;
+    double blink_phase;
+    int    blinking;
+    float  blink_lid_l;      /* 0..1, aplicado ao olho esquerdo         */
+    float  blink_lid_r;      /* 0..1, aplicado ao olho direito          */
+
+    /* micro-expressões */
+    MicroExpr micro;
+    double    micro_cooldown; /* espera global entre micros (s)          */
+
+    /* inclinação via shear */
+    float  tilt;              /* valor atual, suavizado                  */
+    float  tilt_target;       /* alvo definido por anim_sync_brain       */
+
+    /* flutuação */
+    double bob_phase;
+    int    bob_y;
+    float  bob_freq_hz;
+    float  bob_amp_px;
+
+    /* desvio ocioso da pupila */
+    double pupil_timer;
+    float  pupil_tx, pupil_ty;
+
+    /* snapshot de drives para lógica interna de micro */
+    float last_stress;
+    float last_curiosity;
+    float last_happy;
+    float last_playful;
+} AnimState;
+
+/* ── API ───────────────────────────────────────────────────────── */
+
+void anim_init       (AnimState *a);
+void anim_update     (AnimState *a, double dt);
+void anim_sync_brain (AnimState *a,
+                      const Brain  *brain,
+                      const Drives *drives,
+                      const Emotion *emotion);
+
+#endif /* CORTEX_ANIMATION_H */

@@ -1,0 +1,9 @@
+# Trecho extraído do bloco 26
+# Referência: src/renderer/pixel_draw.h
+
+/*
+ * Shear horizontal para inclinação do personagem.
+ * sx > 0 → topo desloca direita (clockwise).
+ * src e dst devem ser buffers distintos.
+ */
+void pd_shear(Canvas dst, const Canvas src, float sx);

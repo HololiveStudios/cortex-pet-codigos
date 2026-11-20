@@ -1,0 +1,8 @@
+# Trecho extraído do bloco 33
+# Referência: src/neural/bridge_apply.c
+
+/* antes: */
+if (bs->trigger_blink && !anim->blinking) {
+
+/* depois: */
+if (bs->trigger_blink && !anim->blinking && anim->micro.type == MICRO_NONE) {

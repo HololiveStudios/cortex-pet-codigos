@@ -1,0 +1,40 @@
+# Trecho extraído do bloco 23
+# Referência: main.c
+
+/* adicionar após os outros includes */
+#include "bridge.h"
+#include "bridge_apply.h"
+
+/* após bridge_create na inicialização */
+Bridge     *bridge = bridge_create();
+BridgeState bstate = {0};
+
+if (!bridge)
+    fprintf(stderr, "[bridge] socket não disponível — Cortex desconectado\n");
+
+/* dentro do while principal, antes de anim_sync_brain */
+if (bridge) {
+    /* publica status atual para responder GET_STATUS */
+    CPayloadStatus ps = {
+        .energy    = (float)drives.energy,
+        .stress    = (float)drives.stress,
+        .curiosity = (float)drives.curiosity,
+        .satiety   = (float)drives.satiety,
+        .affection = (float)drives.affection,
+        .valence   = (float)emotion.valence,
+        .arousal   = (float)emotion.arousal,
+    };
+    bridge_update_status(bridge, &ps);
+    bridge_poll(bridge, &bstate);
+}
+
+bool bridge_override = false;
+if (bridge) bridge_apply(&bstate, &anim, &bridge_override);
+
+/* anim_sync_brain: só roda quando Cortex não assumiu controle */
+if (!bridge_override)
+    anim_sync_brain(&anim, brain, &drives, &emotion);
+anim_update(&anim, dt);
+
+/* cleanup */
+bridge_destroy(bridge);

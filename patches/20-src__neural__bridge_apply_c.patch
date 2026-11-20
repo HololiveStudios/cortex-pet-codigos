@@ -1,0 +1,6 @@
+# Trecho extraído do bloco 20
+# Referência: src/neural/bridge_apply.c
+
+/* adicionar dentro de AnimState */
+float  bob_freq_hz;    /* Hz, default 0.55 */
+float  bob_amp_px;     /* pixels, default 3.5 */

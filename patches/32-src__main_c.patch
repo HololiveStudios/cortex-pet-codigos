@@ -1,0 +1,29 @@
+# Trecho extraído do bloco 32
+# Referência: src/main.c
+
+/* 1. adicionar após "static Canvas canvas;" */
+static Canvas canvas_sheared;
+
+/* ————————————————————————————————————————————— */
+
+/* 2. substituir o bloco de render inteiro */
+
+/* antes: */
+face_draw(canvas, &anim.current, anim.bob_y, anim.blink_lid);
+fb_present(fb, canvas);
+
+/* depois: */
+face_draw(canvas, &anim.current, anim.bob_y,
+          anim.blink_lid_l, anim.blink_lid_r);
+
+if (fabsf(anim.tilt) > 0.005f) {
+    pd_shear(canvas_sheared, canvas, anim.tilt);
+    fb_present(fb, canvas_sheared);
+} else {
+    fb_present(fb, canvas);
+}
+
+/* ————————————————————————————————————————————— */
+
+/* 3. incluir pixel_draw.h para pd_shear (se não vier via face.h) */
+#include "pixel_draw.h"

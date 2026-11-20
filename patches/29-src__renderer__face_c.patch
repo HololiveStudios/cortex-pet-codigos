@@ -1,0 +1,18 @@
+# Trecho extraído do bloco 29
+# Referência: src/renderer/face.c
+
+/* substituir */
+void face_draw(Canvas buf, const FaceState *face, int bob_y, float blink_lid) {
+
+/* por */
+void face_draw(Canvas buf, const FaceState *face, int bob_y, float lid_l, float lid_r) {
+
+/* ——————————————————————— */
+
+/* substituir */
+    draw_eye(buf, EYE_L_CX, EYE_CY + bob_y, &face->left_eye,  blink_lid);
+    draw_eye(buf, EYE_R_CX, EYE_CY + bob_y, &face->right_eye, blink_lid);
+
+/* por */
+    draw_eye(buf, EYE_L_CX, EYE_CY + bob_y, &face->left_eye,  lid_l);
+    draw_eye(buf, EYE_R_CX, EYE_CY + bob_y, &face->right_eye, lid_r);

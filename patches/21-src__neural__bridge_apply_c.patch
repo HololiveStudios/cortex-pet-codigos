@@ -1,0 +1,5 @@
+# Trecho extraído do bloco 21
+# Referência: src/neural/bridge_apply.c
+
+a->bob_freq_hz = 0.55f;
+a->bob_amp_px  = 3.5f;

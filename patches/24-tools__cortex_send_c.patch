@@ -1,0 +1,170 @@
+# Trecho extraído do bloco 24
+# Referência: tools/cortex_send.c
+
+/*
+ * Ferramenta de linha de comando para enviar comandos ao Cortex Pet.
+ *
+ * Build:  gcc -O2 -std=c11 cortex_send.c -o cortex_send
+ * Uso:
+ *   ./cortex_send emotion  <valence -1..1> <arousal 0..1>
+ *   ./cortex_send eye      <0|1|2> <openness> <pupil_x> <pupil_y>
+ *   ./cortex_send mouth    <0..4>  <curvature 0..1>
+ *   ./cortex_send bob      <freq_hz> <amp_px>
+ *   ./cortex_send blink
+ *   ./cortex_send drives   <energy> <stress> <curiosity> <satiety> <affection>
+ *   ./cortex_send status
+ *   ./cortex_send ping
+ */
+
+#define _DEFAULT_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#  define SOCK_PATH "\\\\.\\pipe\\cortex_pet"
+#else
+#  include <sys/socket.h>
+#  include <sys/un.h>
+#  include <unistd.h>
+#  define SOCK_PATH "/tmp/cortex_pet.sock"
+#endif
+
+#include "../src/neural/protocol.h"
+
+static uint8_t sbuf[256];
+static int     sbuf_len;
+
+static void pkt_begin(uint8_t type) {
+    sbuf[0] = CPROT_MAGIC0;
+    sbuf[1] = CPROT_MAGIC1;
+    sbuf[2] = type;
+    sbuf[3] = 0;
+    sbuf_len = CPROT_HDR_LEN;
+}
+
+static void pkt_push(const void *data, int len) {
+    memcpy(sbuf + sbuf_len, data, (size_t)len);
+    sbuf_len += len;
+    sbuf[3]   = (uint8_t)(sbuf_len - CPROT_HDR_LEN);
+}
+
+#ifdef _WIN32
+static HANDLE open_pipe(void) {
+    return CreateFileA(SOCK_PATH, GENERIC_READ|GENERIC_WRITE,
+                       0, NULL, OPEN_EXISTING, 0, NULL);
+}
+static void send_buf(HANDLE h) {
+    DWORD w; WriteFile(h, sbuf, sbuf_len, &w, NULL);
+}
+static int recv_buf(HANDLE h, uint8_t *out, int max) {
+    DWORD r; ReadFile(h, out, max, &r, NULL); return (int)r;
+}
+static void close_conn(HANDLE h) { CloseHandle(h); }
+#else
+static int open_pipe(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un a = {0};
+    a.sun_family = AF_UNIX;
+    strncpy(a.sun_path, SOCK_PATH, sizeof(a.sun_path)-1);
+    if (connect(fd, (struct sockaddr*)&a, sizeof(a)) < 0) {
+        perror("connect"); close(fd); return -1;
+    }
+    return fd;
+}
+static void send_buf(int fd) { write(fd, sbuf, (size_t)sbuf_len); }
+static int recv_buf(int fd, uint8_t *out, int max) { return (int)read(fd, out, (size_t)max); }
+static void close_conn(int fd) { close(fd); }
+#endif
+
+int main(int argc, char **argv) {
+    if (argc < 2) { fprintf(stderr, "uso: cortex_send <cmd> [args]\n"); return 1; }
+
+    const char *cmd = argv[1];
+    int needs_reply = 0;
+
+    if (!strcmp(cmd, "emotion") && argc == 4) {
+        CPayloadEmotion p = { (float)atof(argv[2]), (float)atof(argv[3]) };
+        pkt_begin(CPROT_SET_EMOTION);
+        pkt_push(&p, sizeof(p));
+
+    } else if (!strcmp(cmd, "eye") && argc == 6) {
+        CPayloadEye p = {
+            (uint8_t)atoi(argv[2]), {0,0,0},
+            (float)atof(argv[3]),
+            (float)atof(argv[4]),
+            (float)atof(argv[5])
+        };
+        pkt_begin(CPROT_SET_EYE);
+        pkt_push(&p, sizeof(p));
+
+    } else if (!strcmp(cmd, "mouth") && argc == 4) {
+        CPayloadMouth p = { (uint8_t)atoi(argv[2]), {0,0,0}, (float)atof(argv[3]) };
+        pkt_begin(CPROT_SET_MOUTH);
+        pkt_push(&p, sizeof(p));
+
+    } else if (!strcmp(cmd, "bob") && argc == 4) {
+        CPayloadBob p = { (float)atof(argv[2]), (float)atof(argv[3]) };
+        pkt_begin(CPROT_SET_BOB);
+        pkt_push(&p, sizeof(p));
+
+    } else if (!strcmp(cmd, "blink")) {
+        pkt_begin(CPROT_TRIGGER_BLINK);
+
+    } else if (!strcmp(cmd, "drives") && argc == 7) {
+        CPayloadDrives p = {
+            (float)atof(argv[2]), (float)atof(argv[3]),
+            (float)atof(argv[4]), (float)atof(argv[5]),
+            (float)atof(argv[6])
+        };
+        pkt_begin(CPROT_SET_DRIVES);
+        pkt_push(&p, sizeof(p));
+
+    } else if (!strcmp(cmd, "status")) {
+        pkt_begin(CPROT_GET_STATUS);
+        needs_reply = 1;
+
+    } else if (!strcmp(cmd, "ping")) {
+        pkt_begin(CPROT_PING);
+        needs_reply = 1;
+
+    } else {
+        fprintf(stderr, "comando desconhecido\n");
+        return 1;
+    }
+
+#ifdef _WIN32
+    HANDLE conn = open_pipe();
+    if (conn == INVALID_HANDLE_VALUE) { fprintf(stderr, "pet não encontrado\n"); return 1; }
+#else
+    int conn = open_pipe();
+    if (conn < 0) { fprintf(stderr, "pet não encontrado\n"); return 1; }
+#endif
+
+    send_buf(conn);
+
+    if (needs_reply) {
+        uint8_t rbuf[256];
+        int n = recv_buf(conn, rbuf, sizeof(rbuf));
+        if (n >= CPROT_HDR_LEN + (int)sizeof(CPayloadStatus) &&
+            rbuf[2] == CPROT_STATUS) {
+            CPayloadStatus s;
+            memcpy(&s, rbuf + CPROT_HDR_LEN, sizeof(s));
+            printf("energy    : %.2f\n", s.energy);
+            printf("stress    : %.2f\n", s.stress);
+            printf("curiosity : %.2f\n", s.curiosity);
+            printf("satiety   : %.2f\n", s.satiety);
+            printf("affection : %.2f\n", s.affection);
+            printf("valence   : %+.2f\n", s.valence);
+            printf("arousal   : %.2f\n", s.arousal);
+        } else if (n >= 3 && rbuf[2] == CPROT_PONG) {
+            printf("pong\n");
+        }
+    }
+
+    close_conn(conn);
+    return 0;
+}

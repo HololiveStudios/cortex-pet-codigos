@@ -1,0 +1,5 @@
+# Trecho extraído do bloco 22
+# Referência: src/neural/bridge_apply.c
+
+a->bob_phase += dt * a->bob_freq_hz;
+a->bob_y = (int)roundf(a->bob_amp_px * (float)sin(a->bob_phase));

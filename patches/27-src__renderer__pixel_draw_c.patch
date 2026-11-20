@@ -1,0 +1,16 @@
+# Trecho extraído do bloco 27
+# Referência: src/renderer/pixel_draw.c
+
+void pd_shear(Canvas dst, const Canvas src, float sx) {
+    int cy = CANVAS_H / 2;
+    for (int y = 0; y < CANVAS_H; y++) {
+        int x_off = (int)roundf(sx * (float)(cy - y));
+        for (int dx = 0; dx < CANVAS_W; dx++) {
+            int sx_coord = dx - x_off;
+            dst[y * CANVAS_W + dx] =
+                (sx_coord >= 0 && sx_coord < CANVAS_W)
+                ? src[y * CANVAS_W + sx_coord]
+                : COL_TRANSPARENT;
+        }
+    }
+}

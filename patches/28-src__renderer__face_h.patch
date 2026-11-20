@@ -1,0 +1,8 @@
+# Trecho extraído do bloco 28
+# Referência: src/renderer/face.h
+
+/* substituir */
+void face_draw(Canvas buf, const FaceState *face, int bob_y, float blink_lid);
+
+/* por */
+void face_draw(Canvas buf, const FaceState *face, int bob_y, float lid_l, float lid_r);

@@ -1,0 +1,408 @@
+# Trecho extraído do bloco 31
+# Referência: src/animation/animation.c
+
+#include "animation.h"
+#include "neuro.h"
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define PIf 3.14159265358979323846f
+
+/* ── utilidades ─────────────────────────────────────────────── */
+
+static float lerpf(float a, float b, float t) { return a + (b-a)*t; }
+
+static float clampf(float v, float lo, float hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+static float randf(void) { return (float)rand() / (float)RAND_MAX; }
+
+static float smoothf(float a, float b, double dt, float speed) {
+    float t = (float)(1.0 - exp(-(double)speed * dt));
+    return lerpf(a, b, t);
+}
+
+/* lid calculado de um ângulo de fase 0..π */
+static float lid_from_phase(double phase, double duration) {
+    if (phase < 0.0 || phase > duration) return 0.f;
+    return clampf((float)sin(phase / duration * PIf), 0.f, 1.f);
+}
+
+/* ── interpolação de face ───────────────────────────────────── */
+
+static void lerp_eye(EyeState *cur, const EyeState *tgt, float t) {
+    cur->openness  = lerpf(cur->openness,  tgt->openness,  t);
+    cur->pupil_x   = lerpf(cur->pupil_x,   tgt->pupil_x,   t);
+    cur->pupil_y   = lerpf(cur->pupil_y,   tgt->pupil_y,   t);
+    cur->expr_lid  = lerpf(cur->expr_lid,  tgt->expr_lid,  t);
+}
+
+static void lerp_mouth(MouthState *cur, const MouthState *tgt, float t) {
+    if (cur->shape != tgt->shape && t > 0.5f) cur->shape = tgt->shape;
+    cur->openness  = lerpf(cur->openness,  tgt->openness,  t);
+    cur->width     = lerpf(cur->width,     tgt->width,     t);
+    cur->curvature = lerpf(cur->curvature, tgt->curvature, t);
+}
+
+/* ── micro-expressões ───────────────────────────────────────── */
+
+static void micro_trigger(AnimState *a) {
+    float r = randf();
+
+    if (a->last_stress > 0.65f && r < 0.08f) {
+        a->micro.type     = MICRO_SQUINT;
+        a->micro.phase    = 0.0;
+        a->micro.sub_step = 0;
+        a->micro.param    = 0.30f + randf() * 0.25f;
+        a->micro.cooldown = 1.50;
+        a->micro_cooldown = 4.0 + randf() * 6.0;
+        return;
+    }
+
+    if (a->last_happy > 0.50f && r < 0.12f) {
+        a->micro.type     = MICRO_DOUBLE_BLINK;
+        a->micro.phase    = 0.0;
+        a->micro.sub_step = 0;
+        a->micro.param    = 0.f;
+        a->micro.cooldown = 0.34;
+        a->micro_cooldown = 5.0 + randf() * 8.0;
+        return;
+    }
+
+    if (a->last_curiosity > 0.68f && r < 0.07f) {
+        a->micro.type     = MICRO_SIDE_EYE;
+        a->micro.phase    = 0.0;
+        a->micro.sub_step = 0;
+        a->micro.param    = randf() > 0.5f ? 1.f : -1.f;
+        a->micro.cooldown = 2.50;
+        a->micro_cooldown = 8.0 + randf() * 12.0;
+        return;
+    }
+
+    if (r < 0.06f) {
+        a->micro.type     = MICRO_ASYNC_BLINK;
+        a->micro.phase    = 0.0;
+        a->micro.sub_step = 0;
+        a->micro.param    = 0.f;
+        a->micro.cooldown = 0.22;
+        a->micro_cooldown = 6.0 + randf() * 10.0;
+    }
+}
+
+static void micro_update(AnimState *a, double dt) {
+    if (a->micro.type == MICRO_NONE) {
+        a->micro_cooldown -= dt;
+        if (a->micro_cooldown <= 0.0) micro_trigger(a);
+        return;
+    }
+
+    a->micro.phase    += dt;
+    a->micro.cooldown -= dt;
+
+    switch (a->micro.type) {
+
+    /* ── squint sustentado ── */
+    case MICRO_SQUINT: {
+        float lid;
+        const double t_in  = 0.25;
+        const double t_hold = 1.00;
+        const double t_out  = 0.25;
+
+        if (a->micro.phase < t_in) {
+            lid = a->micro.param * (float)(a->micro.phase / t_in);
+        } else if (a->micro.phase < t_in + t_hold) {
+            lid = a->micro.param;
+        } else {
+            double elapsed_out = a->micro.phase - t_in - t_hold;
+            lid = a->micro.param * (float)(1.0 - elapsed_out / t_out);
+        }
+
+        a->blink_lid_l = clampf(lid, 0.f, 1.f);
+        a->blink_lid_r = clampf(lid, 0.f, 1.f);
+
+        if (a->micro.cooldown <= 0.0) {
+            a->blink_lid_l = 0.f;
+            a->blink_lid_r = 0.f;
+            a->micro.type  = MICRO_NONE;
+        }
+        break;
+    }
+
+    /* ── double blink ── */
+    case MICRO_DOUBLE_BLINK: {
+        const double dur_blink = 0.12;
+        const double dur_pause = 0.10;
+
+        switch (a->micro.sub_step) {
+
+        case 0: { /* primeiro piscar */
+            float lid = lid_from_phase(a->micro.phase, dur_blink);
+            a->blink_lid_l = lid;
+            a->blink_lid_r = lid;
+            if (a->micro.phase >= dur_blink) {
+                a->micro.phase = 0.0;
+                a->micro.sub_step = 1;
+            }
+            break;
+        }
+
+        case 1: { /* pausa */
+            a->blink_lid_l = 0.f;
+            a->blink_lid_r = 0.f;
+            if (a->micro.phase >= dur_pause) {
+                a->micro.phase = 0.0;
+                a->micro.sub_step = 2;
+            }
+            break;
+        }
+
+        default: { /* segundo piscar */
+            float lid = lid_from_phase(a->micro.phase, dur_blink);
+            a->blink_lid_l = lid;
+            a->blink_lid_r = lid;
+            if (a->micro.cooldown <= 0.0) {
+                a->blink_lid_l = 0.f;
+                a->blink_lid_r = 0.f;
+                a->micro.type  = MICRO_NONE;
+            }
+            break;
+        }
+        }
+        break;
+    }
+
+    /* ── async blink: olho esquerdo lidera π/3 ── */
+    case MICRO_ASYNC_BLINK: {
+        const double dur  = 0.18;
+        const double lead = dur / 3.0;
+
+        a->blink_lid_l = lid_from_phase(a->micro.phase,        dur);
+        a->blink_lid_r = lid_from_phase(a->micro.phase - lead, dur);
+
+        if (a->micro.cooldown <= 0.0) {
+            a->blink_lid_l = 0.f;
+            a->blink_lid_r = 0.f;
+            a->micro.type  = MICRO_NONE;
+        }
+        break;
+    }
+
+    /* ── side-eye: pupilas desviam + squint leve ── */
+    case MICRO_SIDE_EYE: {
+        const double t_in   = 0.30;
+        const double t_hold = 1.90;
+        const double t_out  = 0.30;
+
+        float t;
+        if (a->micro.phase < t_in) {
+            t = (float)(a->micro.phase / t_in);
+        } else if (a->micro.phase < t_in + t_hold) {
+            t = 1.f;
+        } else {
+            double eo = a->micro.phase - t_in - t_hold;
+            t = 1.f - (float)(eo / t_out);
+        }
+        t = clampf(t, 0.f, 1.f);
+
+        float px     = a->micro.param * 0.80f * t;
+        float squint = 0.20f * t;
+
+        /* sobrescreve alvo das pupilas diretamente */
+        a->target.left_eye.pupil_x  = px;
+        a->target.right_eye.pupil_x = px;
+        a->blink_lid_l = squint;
+        a->blink_lid_r = squint;
+
+        if (a->micro.cooldown <= 0.0) {
+            a->blink_lid_l = 0.f;
+            a->blink_lid_r = 0.f;
+            a->micro.type  = MICRO_NONE;
+        }
+        break;
+    }
+
+    default:
+        a->micro.type = MICRO_NONE;
+        break;
+    }
+}
+
+/* ── API pública ─────────────────────────────────────────────── */
+
+void anim_init(AnimState *a) {
+    memset(a, 0, sizeof(*a));
+    face_default(&a->current);
+    face_default(&a->target);
+
+    a->blink_timer    = 3.0 + 2.0 * randf();
+    a->micro_cooldown = 3.0 + 5.0 * randf();
+
+    a->bob_freq_hz = 0.55f;
+    a->bob_amp_px  = 3.5f;
+
+    a->pupil_timer = 0.0;
+    a->tilt        = 0.f;
+    a->tilt_target = 0.f;
+}
+
+void anim_sync_brain(AnimState *a,
+                     const Brain   *brain,
+                     const Drives  *drives,
+                     const Emotion *emotion) {
+    (void)emotion;
+
+    float happy = (float)brain_motor(brain, 0);
+    float sad   = (float)brain_motor(brain, 1);
+    float sleep = (float)brain_motor(brain, 2);
+    float surpr = (float)brain_motor(brain, 3);
+    float angry = (float)brain_motor(brain, 4);
+    float curio = (float)brain_motor(brain, 5);
+    float play  = (float)brain_motor(brain, 6);
+
+    /* snapshot para lógica de micros */
+    a->last_stress    = (float)drives->stress;
+    a->last_curiosity = (float)drives->curiosity;
+    a->last_happy     = happy;
+    a->last_playful   = play;
+
+    /* ── expressão alvo ── */
+    FaceState *t = &a->target;
+    face_default(t);
+
+    if (sleep > 0.40f) {
+        t->left_eye.openness  = 0.05f;
+        t->right_eye.openness = 0.05f;
+        t->left_eye.expr_lid  = 0.90f;
+        t->right_eye.expr_lid = 0.90f;
+        t->mouth.shape        = MOUTH_NEUTRAL;
+        t->mouth.width        = 0.25f;
+
+    } else if (surpr > 0.40f) {
+        t->left_eye.openness  = 1.25f;
+        t->right_eye.openness = 1.25f;
+        t->mouth.shape        = MOUTH_OPEN;
+        t->mouth.openness     = 0.75f;
+        t->mouth.width        = 0.55f;
+
+    } else if (angry > 0.38f) {
+        t->left_eye.openness  = 0.75f;
+        t->right_eye.openness = 0.75f;
+        t->left_eye.expr_lid  = 0.30f;
+        t->right_eye.expr_lid = 0.30f;
+        t->mouth.shape        = MOUTH_WORRIED;
+        t->mouth.width        = 0.30f;
+
+    } else if (play > 0.35f || happy > 0.35f) {
+        float boost = play > happy ? play : happy;
+        t->left_eye.openness  = 1.0f + boost * 0.15f;
+        t->right_eye.openness = t->left_eye.openness;
+        t->mouth.shape        = boost > 0.55f ? MOUTH_OPEN : MOUTH_SMILE;
+        t->mouth.openness     = boost;
+        t->mouth.width        = 0.5f + boost * 0.5f;
+        t->mouth.curvature    = 0.6f + happy * 0.4f;
+
+    } else if (sad > 0.35f) {
+        t->left_eye.openness  = 0.70f;
+        t->right_eye.openness = 0.70f;
+        t->left_eye.expr_lid  = 0.30f;
+        t->right_eye.expr_lid = 0.30f;
+        t->mouth.shape        = MOUTH_FROWN;
+        t->mouth.width        = 0.35f;
+        t->mouth.curvature    = 0.60f;
+
+    } else if (curio > 0.30f) {
+        /* assimetria ocular característica de curiosidade */
+        t->left_eye.openness  = 1.10f;
+        t->right_eye.openness = 0.80f;
+        t->mouth.shape        = MOUTH_NEUTRAL;
+        t->mouth.width        = 0.30f;
+
+    } else {
+        t->mouth.shape     = MOUTH_NEUTRAL;
+        t->mouth.width     = 0.40f;
+        t->mouth.curvature = 0.50f;
+    }
+
+    /* ── inclinação alvo ── */
+    float tilt = 0.f;
+    if (curio > 0.30f) {
+        tilt = (curio - 0.30f) * 0.30f;         /* curioso → inclina direita */
+    }
+    if (sad > 0.35f) {
+        tilt = -(sad - 0.35f) * 0.25f;           /* triste → inclina esquerda */
+    }
+    if (play > 0.40f) {
+        /* brincalhão → oscila com a flutuação */
+        tilt = sinf((float)a->bob_phase * 1.5f) * 0.07f;
+    }
+    a->tilt_target = clampf(tilt, -0.12f, 0.12f);
+
+    /* ── desvio de pupila por drives (skip se side-eye ativo) ── */
+    if (a->micro.type != MICRO_SIDE_EYE) {
+        float px = (float)(drives->curiosity - 0.5) * 0.40f;
+        float py = (float)(drives->stress    - 0.5) * -0.25f;
+        t->left_eye.pupil_x  = a->pupil_tx + px;
+        t->right_eye.pupil_x = a->pupil_tx + px;
+        t->left_eye.pupil_y  = a->pupil_ty + py;
+        t->right_eye.pupil_y = a->pupil_ty + py;
+    }
+}
+
+void anim_update(AnimState *a, double dt) {
+
+    /* 1. zera lids — serão preenchidos abaixo */
+    a->blink_lid_l = 0.f;
+    a->blink_lid_r = 0.f;
+
+    /* 2. piscar normal (suprimido quando micro está ativo) */
+    if (a->micro.type == MICRO_NONE) {
+        if (a->blinking) {
+            a->blink_phase += dt * PIf / 0.12;
+            if (a->blink_phase >= PIf) {
+                a->blinking    = 0;
+                a->blink_phase = 0.0;
+            } else {
+                float lid      = clampf((float)sin(a->blink_phase), 0.f, 1.f);
+                a->blink_lid_l = lid;
+                a->blink_lid_r = lid;
+            }
+        } else {
+            a->blink_timer -= dt;
+            if (a->blink_timer <= 0.0) {
+                a->blinking    = 1;
+                a->blink_phase = 0.0;
+                a->blink_timer = 2.5 + 3.5 * randf();
+            }
+        }
+    }
+
+    /* 3. micro-expressões (pode sobrescrever lids e pupila alvo) */
+    micro_update(a, dt);
+
+    /* 4. inclinação suavizada */
+    a->tilt = smoothf(a->tilt, a->tilt_target, dt, 3.f);
+
+    /* 5. flutuação */
+    a->bob_phase += dt * (double)a->bob_freq_hz;
+    a->bob_y = (int)roundf(a->bob_amp_px * sinf((float)a->bob_phase));
+
+    /* 6. desvio ocioso da pupila (skip se side-eye controla) */
+    if (a->micro.type != MICRO_SIDE_EYE) {
+        a->pupil_timer -= dt;
+        if (a->pupil_timer <= 0.0) {
+            float ang      = randf() * 2.f * PIf;
+            float mag      = 0.15f + 0.20f * randf();
+            a->pupil_tx    = mag * cosf(ang);
+            a->pupil_ty    = mag * sinf(ang);
+            a->pupil_timer = 1.5 + 3.0 * randf();
+        }
+    }
+
+    /* 7. lerp current → target */
+    float alpha = (float)(1.0 - exp(-5.0 * dt));
+    lerp_eye  (&a->current.left_eye,  &a->target.left_eye,  alpha);
+    lerp_eye  (&a->current.right_eye, &a->target.right_eye, alpha);
+    lerp_mouth(&a->current.mouth,     &a->target.mouth,     alpha);
+}
